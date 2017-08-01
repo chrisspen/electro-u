@@ -132,19 +132,54 @@ module make_ring(){
     }
 }
 
+module make_legs(){
+    slope_d = 500;
+    w = 9.7;
+    
+    if(0)
+    translate([0,0,slope_d/2+10])
+    rotate([90,0,0])
+    cylinder(d=slope_d, h=50, center=true, $fn=300);
+    
+    //difference(){
+        //make_slope();
+        //translate([-100/2,-(100/2+20),0])cube([100,100,100],center=true);
+    //}
+    difference(){
+        translate([-83.6,0,20])
+        difference(){
+            color("purple")
+            translate([0,0,-50/2])
+            cube([w, 35, 50], center=true);
+            
+            color("orange")
+            translate([0,0,-50/2-10])
+            cube([w*2, 40-15, 50], center=true);
+        }
+        
+        
+        make_slope();
+    }
+}
+
 if(0)
 make_ring();
 
 if(1)
-rotate([0,0,45])rotate([-90,0,0])
-make_slope();
+rotate([0,-90,0])
+make_legs();
 
-// pads to help bed adhesion
-color("blue")
-for(i=[0:1])
-mirror([i,i,0])
-translate([44.5,74,-50/2+0.2/2])
-cube([15,15,0.2], center=true);
+if(0){
+    //rotate([0,0,45])rotate([-90,0,0])
+    make_slope();
+
+    // pads to help bed adhesion
+    color("blue")
+    for(i=[0:1])
+    mirror([i,i,0])
+    translate([44.5,74,-50/2+0.2/2])
+    cube([15,15,0.2], center=true);
+}
 
 if(0)
 translate([0,0,-2])
