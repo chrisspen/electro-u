@@ -1,8 +1,41 @@
 
-#define DEBUG 0
+#define DEBUG 1
 
 // The amount of time to wait without ball state change before reseting the ball state.
 #define STATE_TIMEOUT 5000 // milliseconds
+
+#define RESET_TIMEOUT 5000 // milliseconds
+
+// If the ball is moving too slowly, this ratio will be used.
+//#define DURATION_RATIO_OVER_ACCEL 0.79 // over-accelerates
+//#define DURATION_RATIO_OVER_ACCEL 0.86 // over-accelerates
+//#define DURATION_RATIO_OVER_ACCEL 0.87 // over-accelerates
+//#define DURATION_RATIO_OVER_ACCEL 0.88 // over-accelerates
+
+// If the ball is moving too fast, this ratio will be used.
+//#define DURATION_RATIO_OVER_DECAY 0.80 // over-decays
+//#define DURATION_RATIO_OVER_DECAY 0.87 // over-decays
+//#define DURATION_RATIO_OVER_DECAY 0.88 // over-decays
+//#define DURATION_RATIO_OVER_DECAY 0.89 // over-decays
+
+// decrease=>accel, increase=>decay
+//#define DEFAULT_DURATION_RATIO 0.78 // over-accels
+//#define DEFAULT_DURATION_RATIO 0.79 // barely over-accels
+#define DEFAULT_DURATION_RATIO 0.80 // barely over-decays
+//#define DEFAULT_DURATION_RATIO 0.89 // over-decays
+
+// The amount the duration ratio is increased or decreased to correct the velocity.
+//#define DURATION_RATIO_STEP 0.05 // too drastic
+#define DURATION_RATIO_STEP 0.01
+
+// A duration under this value means the ball is moving too fast, so the electromagnet will not be activated, causing friction to slightly slow it down.
+//#define DURATION_THRESHOLD 58
+#define TARGET_VELOCITY 0.30 // meter/second, too fast
+//#define TARGET_VELOCITY 0.305 // meter/second, decays
+//#define TARGET_VELOCITY 0.38 // meter/second, maximum natural velocity
+
+// The range from the target velocity the actual velocity is allowed to get before triggering correction.
+#define TARGET_VELOCITY_RANGE 0.05
 
 // Physical constants of the apparatuts.
 #define SENSOR_WIDTH 16.0 // mm
@@ -10,7 +43,6 @@
 #define MAGNET_FORCE 50.0 // newtons
 #define MAGNET_RADIUS 12.5 // mm
 #define MAGNET_LENGTH = 20 // mm
-#define TARGET_BALL_VELOCITY 0.34 // meter/second, the ideal ball velocity for a stable oscillation
 #define GRAVITY 9.80665 // m/s^2, acceleration of gravity
 #define BALL_MASS 3 // grams
 #define LENGTH_OF_ARC_TO_CENTER 85 // mm, the full length of the arc of the slope
@@ -67,11 +99,21 @@ unsigned long magnet_on_time = 0;
 // Time when the magnet was last turned off.
 unsigned long magnet_off_time = 0;
 
+unsigned long last_reset = RESET_TIMEOUT;
+
 // Blink timer.
 unsigned long last_blink = 0;
 
 // The ball's estimated velocity, calculated from the sensor detection times and the known width of the sensor.
 double ball_velocity = 0; // m/s, PID input
+
+double min_ball_velocity = 1000;
+
+double max_ball_velocity = 0;
+
+double mean_ball_velocity = 0;
+
+double duration_ratio = DEFAULT_DURATION_RATIO;
 
 void activate_electromagnet(){
     magnet_on_time = millis();
@@ -94,7 +136,21 @@ void on_sensor_change(){
     //digitalWrite(LED_PIN, current_state);
 }
 
-//void(* resetFunc) (void) = 0;
+void reset(){
+    #if DEBUG
+    Serial.println(String("reseting:")+String(BALL_RIGHT_START)+String(" millis:")+String(millis())+String(" last_state_change_time:")+String(last_state_change_time));
+    #endif
+
+    go_to_state(BALL_RIGHT_START);
+
+    min_ball_velocity = 1000;
+    max_ball_velocity = 0;
+    
+    duration_ratio = DEFAULT_DURATION_RATIO;
+}
+
+//http://www.instructables.com/id/two-ways-to-reset-arduino-in-software/
+void(* resetFunc) (void) = 0;
 
 void setup()                    
 {
@@ -115,6 +171,8 @@ void setup()
     #if DEBUG
     Serial.begin(115200); // Must match MONITOR_BAUDRATE.
     #endif
+    
+    reset();
     
 }
 
@@ -154,6 +212,9 @@ void loop()
                 
                 //ball_velocity = (SENSOR_WIDTH/1000.)/((sensor_low_time - sensor_high_time)/1000.);
                 ball_velocity = SENSOR_WIDTH/(sensor_low_time - sensor_high_time); // meter/second
+                //min_ball_velocity = min(ball_velocity, min_ball_velocity);
+                //max_ball_velocity = max(ball_velocity, max_ball_velocity);
+                //mean_ball_velocity = (min_ball_velocity + max_ball_velocity)/2.;
 
                 // Calculate total time it should take ball bearing to reach the center of the electromagnet => distance/velocity
                 // Note, this doesn't account for acceleration.
@@ -163,23 +224,42 @@ void loop()
                 //duration_to_center_time *= 0.84; // too much accel, stable but then flys off
                 //duration_to_center_time *= 0.8475; // still too much, stable but then flys off
                 //duration_to_center_time *= 0.85; // almost perfect? over accelerates
-                duration_to_center_time *= 0.86;
+                //duration_to_center_time *= 0.86; // almost perfect? over accelerates
+                /////duration_to_center_time *= 0.865; // over accelerates
+                //duration_to_center_time *= 0.87; // almost perfect? decays
                 //duration_to_center_time *= 0.93; // decays quickly
                 //duration_to_center_time *= 0.94; // decays quickly
                 //duration_to_center_time *= 0.95; // decays quickly
+                
+                //if(ball_velocity < TARGET_VELOCITY){
+                    // Ball too slow, so speed up.
+                //    duration_to_center_time *= DURATION_RATIO_OVER_ACCEL;
+                //}else{
+                    // Ball too fast, so slow down.
+                //    duration_to_center_time *= DURATION_RATIO_OVER_DECAY;
+                //}
+                duration_to_center_time *= duration_ratio;
 
                 // If duration ~= 60 ms, that's stable or too slow, so we need to speed it up by activating the magnet.
                 // If duration < 60 ms, that's going too fast, so we need to slow it down by keeping the magnet off and letting friction slow the ball.
                 // Turn on electromagnet so it can immediately begin pulling, but only when ball slowing.
-                if(duration_to_center_time >= 58){
+                //if(duration_to_center_time >= DURATION_THRESHOLD){
+                if(ball_velocity <= TARGET_VELOCITY){
                     activate_electromagnet();
+                    
+                    #if DEBUG
+                    Serial.println(String("magnet activated"));
+                    #endif
                 }
     
                 #if DEBUG
                 //Serial.println(String("sensor_high_time:")+String(sensor_high_time));
                 //Serial.println(String("sensor_low_time:")+String(sensor_low_time));
+                Serial.println(String("duration_ratio:")+String(duration_ratio));
                 Serial.println(String("ball_velocity(m/s):")+String(ball_velocity));
-                Serial.println(String("duration_to_center_time2(ms):")+String(duration_to_center_time));
+                //Serial.println(String("min_ball_velocity(m/s):")+String(min_ball_velocity));
+                //Serial.println(String("max_ball_velocity(m/s):")+String(max_ball_velocity));
+                //Serial.println(String("duration_to_center_time2(ms):")+String(duration_to_center_time));
                 //Serial.println(String("going to right pull:")+String(BALL_RIGHT_PULL));
                 #endif
 
@@ -213,16 +293,34 @@ void loop()
                 // Ball has gone up the right slope passed the sensor, near at the starting position.
                 //Serial.println(String("going to start:")+String(BALL_RIGHT_START));
                 go_to_state(BALL_RIGHT_START);
+
+                // If last known velocity is outside accepted range, then modify the duration ratio to increase or decrease the velocity.
+                if(abs(ball_velocity - TARGET_VELOCITY) > TARGET_VELOCITY_RANGE){
+                    if(ball_velocity > TARGET_VELOCITY){
+                        // Velocity too fast, decelerate.
+                        duration_ratio += DURATION_RATIO_STEP;
+                    }else{
+                        // Velocity too slow, accelerate.
+                        duration_ratio -= DURATION_RATIO_STEP;
+                    }
+                }else{
+                    // If we're in range again then reset ratio.
+                    duration_ratio = DEFAULT_DURATION_RATIO;
+                }
+                
+                // When the ball's back in start, try resetting the board periodically.
+                //if((millis() - last_reset) >= RESET_TIMEOUT){
+                //    last_reset = millis();
+                //    resetFunc();
+                //}
+
             }
             break;
     }
 
     // If state doesn't change within the specified timeout, then assume something's gone wrong and revert to default state.
     if((millis() - last_state_change_time) >= STATE_TIMEOUT){
-        #if DEBUG
-        Serial.println(String("reseting:")+String(BALL_RIGHT_START)+String(" millis:")+String(millis())+String(" last_state_change_time:")+String(last_state_change_time));
-        #endif
-        go_to_state(BALL_RIGHT_START);
+        reset();
     }
 
 }
